@@ -1,6 +1,6 @@
 #  SUPERSTORE SALES — INTERACTIVE STREAMLIT DASHBOARD
 #  Course Project | Data Analytics
-#  Author : Vivek Pant, Yash, Param, Harishta
+#  Author : Vivek Pant
 #
 #  HOW TO RUN:
 #      pip install streamlit plotly pandas openpyxl

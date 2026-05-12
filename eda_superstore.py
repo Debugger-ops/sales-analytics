@@ -1,7 +1,7 @@
 # =============================================================================
 #  SUPERSTORE SALES — EXPLORATORY DATA ANALYSIS (EDA)
 #  Course Project | Data Analytics
-#  Author : Bhumika
+#  Author : vivek
 #  Dataset: train.csv  (Superstore Sales)
 # =============================================================================
 #
@@ -19,9 +19,11 @@
 import pandas as pd           # Data manipulation and analysis
 import matplotlib.pyplot as plt  # Core plotting library
 import matplotlib.ticker as mticker
+from matplotlib.patches import Patch  # Import moved to top
 import seaborn as sns         # High-level statistical visualisation
 import warnings
 import os
+import sys
 
 warnings.filterwarnings("ignore")   # Suppress minor deprecation warnings
 
@@ -30,6 +32,8 @@ sns.set_theme(style="whitegrid", palette="muted", font_scale=1.1)
 
 # Directory where chart images will be saved (same folder as this script)
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
+if not OUTPUT_DIR:  # Handle case when running interactively
+    OUTPUT_DIR = os.getcwd()
 
 
 # =============================================================================
@@ -61,7 +65,37 @@ def load_and_clean(filepath: str) -> pd.DataFrame:
     # ── Step 1: Load the CSV ──────────────────────────────────────────────────
     print("=" * 60)
     print("STEP 1 ▸ Loading data …")
-    df = pd.read_csv(filepath)
+    
+    # Check if file exists
+    if not os.path.exists(filepath):
+        print(f"\n❌ ERROR: File not found at {filepath}")
+        print("\nTrying alternative paths...")
+        
+        # Try alternative paths
+        alternative_paths = [
+            "train.csv",
+            os.path.join(os.getcwd(), "train.csv"),
+            os.path.join(os.path.dirname(__file__), "train.csv") if __file__ else None
+        ]
+        
+        filepath = None
+        for alt_path in alternative_paths:
+            if alt_path and os.path.exists(alt_path):
+                filepath = alt_path
+                print(f"✅ Found at: {filepath}")
+                break
+        
+        if filepath is None:
+            print("\n❌ FATAL: train.csv not found in any location!")
+            print("Please ensure train.csv is in the same directory as this script.")
+            sys.exit(1)
+    
+    try:
+        df = pd.read_csv(filepath, encoding='utf-8')
+    except UnicodeDecodeError:
+        # Try alternative encoding
+        df = pd.read_csv(filepath, encoding='latin-1')
+    
     print(f"  Rows: {len(df):,}   Columns: {df.shape[1]}")
     print(f"  Columns: {list(df.columns)}\n")
 
@@ -70,9 +104,23 @@ def load_and_clean(filepath: str) -> pd.DataFrame:
     # We use pd.to_datetime() with dayfirst=True so Python doesn't
     # misread day 04 as month 04.
     print("STEP 2 ▸ Converting 'Order Date' to datetime …")
-    df["Order Date"] = pd.to_datetime(df["Order Date"], dayfirst=True)
-    print(f"  dtype after conversion: {df['Order Date'].dtype}")
-    print(f"  Date range: {df['Order Date'].min().date()}  →  {df['Order Date'].max().date()}\n")
+    
+    try:
+        df["Order Date"] = pd.to_datetime(df["Order Date"], dayfirst=True, errors='coerce')
+        
+        # Check for parsing failures
+        failed_dates = df["Order Date"].isna().sum()
+        if failed_dates > 0:
+            print(f"  ⚠️  Warning: {failed_dates} dates could not be parsed")
+            # Drop rows with invalid dates
+            df = df.dropna(subset=['Order Date'])
+            print(f"  Dropped {failed_dates} rows with invalid dates")
+        
+        print(f"  dtype after conversion: {df['Order Date'].dtype}")
+        print(f"  Date range: {df['Order Date'].min().date()}  →  {df['Order Date'].max().date()}\n")
+    except Exception as e:
+        print(f"❌ ERROR parsing dates: {e}")
+        sys.exit(1)
 
     # ── Step 3: Handle missing Postal Codes ───────────────────────────────────
     # Postal Code is metadata only; it's NOT used in any analysis.
@@ -87,7 +135,7 @@ def load_and_clean(filepath: str) -> pd.DataFrame:
     print(f"  Missing Postal Codes after fix : {df['Postal Code'].isna().sum()}")
 
     # Check for missing values in other columns
-    other_missing = df.drop(columns=["Postal Code"]).isna().sum()
+    other_missing = df.drop(columns=["Postal Code"], errors='ignore').isna().sum()
     cols_with_missing = other_missing[other_missing > 0]
     if cols_with_missing.empty:
         print("  ✅ No missing values found in any other column.\n")
@@ -142,7 +190,8 @@ def plot_monthly_trend(df: pd.DataFrame):
     # Convert Period to string for the X-axis labels
     monthly["Year-Month"] = monthly["Year-Month"].astype(str)
 
-    fig, ax = plt.subplots(figsize=(14, 5))
+    # Create figure with higher DPI for better quality
+    fig, ax = plt.subplots(figsize=(14, 5), dpi=100)
 
     # Plot the line with circular markers at each data point
     ax.plot(
@@ -156,7 +205,12 @@ def plot_monthly_trend(df: pd.DataFrame):
     )
 
     # Shade the area under the curve for visual impact
-    ax.fill_between(monthly["Year-Month"], monthly["Sales"], alpha=0.12, color="#2563EB")
+    ax.fill_between(
+        range(len(monthly)), 
+        monthly["Sales"], 
+        alpha=0.12, 
+        color="#2563EB"
+    )
 
     # ── Formatting ────────────────────────────────────────────────────────────
     ax.set_title("Total Sales per Month (Trend Analysis)", fontsize=16, fontweight="bold", pad=15)
@@ -170,13 +224,14 @@ def plot_monthly_trend(df: pd.DataFrame):
     # Format Y-axis with comma separators (e.g., 50,000 instead of 50000)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
 
-    ax.legend()
+    ax.legend(loc='best')
+    ax.grid(True, alpha=0.3)
     plt.tight_layout()
 
     path = os.path.join(OUTPUT_DIR, "chart1_monthly_trend.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"   Saved → {path}")
+    print(f"   ✅ Saved → {path}")
 
 
 # =============================================================================
@@ -206,47 +261,62 @@ def plot_category_analysis(df: pd.DataFrame):
         .head(10)          # Show only the top 10 sub-categories
     )
 
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), dpi=100)
 
     # ── Left chart: Category ──────────────────────────────────────────────────
     colors_cat = ["#2563EB", "#10B981", "#F59E0B"]
-    bars = axes[0].bar(cat_sales.index, cat_sales.values, color=colors_cat, edgecolor="white", linewidth=0.8)
+    bars = axes[0].bar(
+        cat_sales.index, 
+        cat_sales.values, 
+        color=colors_cat[:len(cat_sales)],  # Handle if less than 3 categories
+        edgecolor="white", 
+        linewidth=0.8
+    )
 
     # Annotate each bar with its total value
     for bar in bars:
+        height = bar.get_height()
         axes[0].text(
             bar.get_x() + bar.get_width() / 2,  # centre of bar
-            bar.get_height() + 1000,             # just above the bar
-            f"${bar.get_height():,.0f}",
+            height + (height * 0.02),            # just above the bar (2% of height)
+            f"${height:,.0f}",
             ha="center", va="bottom", fontsize=10, fontweight="bold"
         )
 
     axes[0].set_title("Sales by Category", fontsize=14, fontweight="bold")
-    axes[0].set_xlabel("Category")
-    axes[0].set_ylabel("Total Sales (USD)")
+    axes[0].set_xlabel("Category", fontsize=11)
+    axes[0].set_ylabel("Total Sales (USD)", fontsize=11)
     axes[0].yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    axes[0].grid(True, alpha=0.3, axis='y')
 
     # ── Right chart: Sub-Category ─────────────────────────────────────────────
     # Use a horizontal bar chart — easier to read long labels
     palette = sns.color_palette("Blues_r", n_colors=len(sub_sales))
-    axes[1].barh(sub_sales.index, sub_sales.values, color=palette, edgecolor="white")
+    bars_h = axes[1].barh(sub_sales.index, sub_sales.values, color=palette, edgecolor="white")
 
     # Annotate bars
     for i, (val, name) in enumerate(zip(sub_sales.values, sub_sales.index)):
-        axes[1].text(val + 500, i, f"${val:,.0f}", va="center", fontsize=9)
+        axes[1].text(
+            val + (val * 0.01),  # Slightly to the right (1% of value)
+            i, 
+            f"${val:,.0f}", 
+            va="center", 
+            fontsize=9
+        )
 
     axes[1].set_title("Top 10 Sub-Categories by Sales", fontsize=14, fontweight="bold")
-    axes[1].set_xlabel("Total Sales (USD)")
+    axes[1].set_xlabel("Total Sales (USD)", fontsize=11)
     axes[1].invert_yaxis()   # Highest value at the top
     axes[1].xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    axes[1].grid(True, alpha=0.3, axis='x')
 
-    plt.suptitle("Category & Sub-Category Analysis", fontsize=16, fontweight="bold", y=1.02)
+    plt.suptitle("Category & Sub-Category Analysis", fontsize=16, fontweight="bold", y=1.00)
     plt.tight_layout()
 
     path = os.path.join(OUTPUT_DIR, "chart2_category_analysis.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"   Saved → {path}")
+    print(f"   ✅ Saved → {path}")
 
 
 # =============================================================================
@@ -271,7 +341,7 @@ def plot_segment_insights(df: pd.DataFrame):
     seg_sales  = df.groupby("Segment")["Sales"].sum()
     seg_cat    = df.groupby(["Segment", "Category"])["Sales"].sum().reset_index()
 
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), dpi=100)
 
     # ── Left: Pie chart ───────────────────────────────────────────────────────
     colors_seg = ["#3B82F6", "#10B981", "#F59E0B"]
@@ -279,7 +349,7 @@ def plot_segment_insights(df: pd.DataFrame):
         seg_sales.values,
         labels=seg_sales.index,
         autopct="%1.1f%%",        # Show percentage inside each slice
-        colors=colors_seg,
+        colors=colors_seg[:len(seg_sales)],
         startangle=140,           # Rotate so 'Consumer' starts near top
         wedgeprops={"edgecolor": "white", "linewidth": 2}
     )
@@ -287,33 +357,45 @@ def plot_segment_insights(df: pd.DataFrame):
     for at in autotexts:
         at.set_fontsize(11)
         at.set_fontweight("bold")
+        at.set_color('white')
 
     axes[0].set_title("Revenue Share by Customer Segment", fontsize=14, fontweight="bold")
 
     # ── Right: Grouped bar chart ──────────────────────────────────────────────
     pivot = seg_cat.pivot(index="Segment", columns="Category", values="Sales")
+    
+    # Get available categories and their colors
+    available_categories = pivot.columns.tolist()
+    cat_color_map = {
+        "Technology": "#2563EB",
+        "Furniture": "#10B981",
+        "Office Supplies": "#F59E0B"
+    }
+    plot_colors = [cat_color_map.get(cat, "#999999") for cat in available_categories]
+    
     pivot.plot(
         kind="bar",
         ax=axes[1],
-        color=["#2563EB", "#10B981", "#F59E0B"],
+        color=plot_colors,
         edgecolor="white",
         linewidth=0.5
     )
 
     axes[1].set_title("Sales by Segment & Category", fontsize=14, fontweight="bold")
-    axes[1].set_xlabel("Customer Segment")
-    axes[1].set_ylabel("Total Sales (USD)")
+    axes[1].set_xlabel("Customer Segment", fontsize=11)
+    axes[1].set_ylabel("Total Sales (USD)", fontsize=11)
     axes[1].set_xticklabels(pivot.index, rotation=0)
     axes[1].yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
     axes[1].legend(title="Category", loc="upper right")
+    axes[1].grid(True, alpha=0.3, axis='y')
 
-    plt.suptitle("Customer Segment Analysis", fontsize=16, fontweight="bold", y=1.02)
+    plt.suptitle("Customer Segment Analysis", fontsize=16, fontweight="bold", y=1.00)
     plt.tight_layout()
 
     path = os.path.join(OUTPUT_DIR, "chart3_segment_insights.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"   Saved → {path}")
+    print(f"   ✅ Saved → {path}")
 
 
 # =============================================================================
@@ -354,9 +436,9 @@ def plot_geospatial_analysis(df: pd.DataFrame):
         "Central": "#F59E0B",
         "South":   "#EF4444"
     }
-    bar_colors = [region_colors[r] for r in state_sales["Region"]]
+    bar_colors = [region_colors.get(r, "#999999") for r in state_sales["Region"]]
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(12, 6), dpi=100)
 
     bars = ax.barh(
         state_sales["State"],
@@ -369,10 +451,11 @@ def plot_geospatial_analysis(df: pd.DataFrame):
 
     # Annotate bars with sales figure
     for bar in bars:
+        width = bar.get_width()
         ax.text(
-            bar.get_width() + 500,
+            width + (width * 0.01),  # Slightly to the right
             bar.get_y() + bar.get_height() / 2,
-            f"${bar.get_width():,.0f}",
+            f"${width:,.0f}",
             va="center", fontsize=9, fontweight="bold"
         )
 
@@ -380,9 +463,9 @@ def plot_geospatial_analysis(df: pd.DataFrame):
     ax.set_title("Top 10 States by Total Sales (Coloured by Region)", fontsize=15, fontweight="bold", pad=15)
     ax.set_xlabel("Total Sales (USD)", fontsize=12)
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    ax.grid(True, alpha=0.3, axis='x')
 
     # Build a custom legend for the Region colours
-    from matplotlib.patches import Patch
     legend_patches = [Patch(color=c, label=r) for r, c in region_colors.items()]
     ax.legend(handles=legend_patches, title="Region", loc="lower right")
 
@@ -391,7 +474,7 @@ def plot_geospatial_analysis(df: pd.DataFrame):
     path = os.path.join(OUTPUT_DIR, "chart4_geospatial_top10_states.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"   Saved → {path}")
+    print(f"   ✅ Saved → {path}")
 
 
 # =============================================================================
@@ -409,10 +492,26 @@ def print_business_insights(df: pd.DataFrame):
 
     total_sales   = df["Sales"].sum()
     avg_order     = df["Sales"].mean()
-    top_cat       = df.groupby("Category")["Sales"].sum().idxmax()
-    top_state     = df.groupby("State")["Sales"].sum().idxmax()
-    top_segment   = df.groupby("Segment")["Sales"].sum().idxmax()
-    peak_month    = df.groupby("Year-Month")["Sales"].sum().idxmax()
+    
+    try:
+        top_cat     = df.groupby("Category")["Sales"].sum().idxmax()
+    except:
+        top_cat = "N/A"
+    
+    try:
+        top_state   = df.groupby("State")["Sales"].sum().idxmax()
+    except:
+        top_state = "N/A"
+    
+    try:
+        top_segment = df.groupby("Segment")["Sales"].sum().idxmax()
+    except:
+        top_segment = "N/A"
+    
+    try:
+        peak_month  = df.groupby("Year-Month")["Sales"].sum().idxmax()
+    except:
+        peak_month = "N/A"
 
     print(f"  Total Revenue   : ${total_sales:>12,.2f}")
     print(f"  Avg Order Value : ${avg_order:>12,.2f}")
@@ -437,18 +536,38 @@ def print_business_insights(df: pd.DataFrame):
 # =============================================================================
 
 if __name__ == "__main__":
+    
+    try:
+        # ── Load & clean ──────────────────────────────────────────────────────────
+        DATA_PATH = os.path.join(OUTPUT_DIR, "train.csv")
+        df = load_and_clean(DATA_PATH)
+        
+        # Check if dataframe is valid
+        if df is None or len(df) == 0:
+            print("\n❌ ERROR: No data loaded or dataframe is empty!")
+            sys.exit(1)
 
-    # ── Load & clean ──────────────────────────────────────────────────────────
-    DATA_PATH = os.path.join(OUTPUT_DIR, "train.csv")
-    df = load_and_clean(DATA_PATH)
+        # ── Generate all four visualisations ──────────────────────────────────────
+        plot_monthly_trend(df)
+        plot_category_analysis(df)
+        plot_segment_insights(df)
+        plot_geospatial_analysis(df)
 
-    # ── Generate all four visualisations ──────────────────────────────────────
-    plot_monthly_trend(df)
-    plot_category_analysis(df)
-    plot_segment_insights(df)
-    plot_geospatial_analysis(df)
+        # ── Print business insights ───────────────────────────────────────────────
+        print_business_insights(df)
 
-    # ── Print business insights ───────────────────────────────────────────────
-    print_business_insights(df)
-
-    print("\n✅  All done! Four chart images saved in:", OUTPUT_DIR)
+        print("\n" + "=" * 60)
+        print("✅  ALL DONE! Four chart images saved in:")
+        print(f"    {OUTPUT_DIR}")
+        print("=" * 60)
+        print("\nGenerated files:")
+        print("  1. chart1_monthly_trend.png")
+        print("  2. chart2_category_analysis.png")
+        print("  3. chart3_segment_insights.png")
+        print("  4. chart4_geospatial_top10_states.png")
+        
+    except Exception as e:
+        print(f"\n❌ FATAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
